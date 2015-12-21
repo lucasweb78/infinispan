@@ -113,12 +113,21 @@ public class CacheWriterInterceptor extends JmxStatsCommandInterceptor {
          if (getLog().isTraceEnabled()) getLog().tracef("Calling loader.commit() for transaction %s", tx);
 
          Transaction xaTx = null;
-         try {
-            xaTx = suspendRunningTx(ctx);
-            store(ctx);
-         } finally {
-            resumeRunningTx(xaTx);
-         }
+          try {
+              xaTx = suspendRunningTx(ctx);
+              // Using a local tx for the store update, this ensures any stores belonging to the current that support tx (e.g. JDBC) will update the modifications atomically.
+              // This does NOT guarantee all tx stores associated with write will by rolled back only the tx stores associated to the node performing the write.
+              // This works best when using a shared store and a replicated cluster, as a single node is then responsible for making all of the modifications to the store
+              // and you can be sure that either all of the store modifications were successful, or rolled back.
+              transactionManager.begin();
+              store(ctx);
+              transactionManager.commit();
+          } catch (Exception e) {
+              transactionManager.rollback();
+              throw e;
+          } finally {
+              resumeRunningTx(xaTx);
+          }
       } else {
          if (getLog().isTraceEnabled()) getLog().trace("Commit called with no modifications; ignoring.");
       }
